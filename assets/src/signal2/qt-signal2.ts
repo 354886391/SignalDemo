@@ -39,6 +39,7 @@ let _nextId: number = 1;
  * Signal类 - 实现信号槽机制的核心类（单例模式）
  */
 export class Signal {
+
     // 使用Map存储每个信号名对应的所有槽函数
     private static _slots = new Map<string, Slot<any>[]>();
 
@@ -176,7 +177,7 @@ export class Signal {
             signalName = signal.name;
             // 如果函数名是anonymous或空字符串，尝试使用函数对象的signalName属性
             if (signalName === 'anonymous' || signalName === '') {
-                signalName = (signal as any).signalName || 'unknown';
+                signalName = signal['signalName'] || 'unknown';
             }
         } else {
             // 如果传入的是字符串，直接使用该字符串作为信号名
@@ -190,30 +191,6 @@ export class Signal {
  * 信号装饰器 - 用于定义信号属性
  * @param signalName 可选的信号名称，如果不提供则使用属性名
  */
-// export function signal(signalName?: string) {
-//     return function (target: any, prop: string) {
-//         // 使用属性描述符来定义信号属性
-//         Object.defineProperty(target, prop, {
-//             get: () => {
-//                 // 如果没有提供signalName，使用属性名作为信号名
-//                 const finalName = signalName || prop;
-//                 // 为当前实例创建一个信号函数引用
-//                 const signalFunc = () => { };
-//                 // 设置函数名
-//                 Object.defineProperty(signalFunc, 'name', {
-//                     value: finalName,
-//                     configurable: true
-//                 });
-//                 // 设置signalName属性，以防函数名设置失败
-//                 signalFunc.signalName = finalName;
-//                 // 返回信号函数引用
-//                 return signalFunc;
-//             },
-//             enumerable: true,
-//             configurable: true
-//         });
-//     };
-// }
 
 export function signal(signalName?: string) {
     return function (target: any, prop: string) {
@@ -223,9 +200,9 @@ export function signal(signalName?: string) {
         Object.defineProperty(target, prop, {
             get: () => {
                 // 简化：直接创建函数并设置signalName属性
-                const signalFunc = function () { };
-                signalFunc.signalName = finalName;
-                return signalFunc;
+                const anonymous = () => { };
+                anonymous.signalName = finalName;
+                return anonymous;
             },
             enumerable: true,
             configurable: true
