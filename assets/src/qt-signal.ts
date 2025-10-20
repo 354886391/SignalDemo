@@ -74,7 +74,7 @@ export class Signal<T extends (...args: any[]) => void> {
 
     emit(...args: Parameters<T>) {
         // snapshot for safe iteration
-        let snapshot = Array.from(this._slots.entries());
+        let snapshot = [...this._slots.entries()]; // Array.from(this._slots.entries());
         for (const [id, slot] of snapshot) {
             // 检查槽是否仍然存在（可能在处理过程中被移除）
             if (!this._slots.has(id)) continue;
@@ -109,7 +109,7 @@ export class Signal<T extends (...args: any[]) => void> {
 
     async emitAsync(...args: Parameters<T>): Promise<void> {
         // 创建快照
-        const snapshot = Array.from(this._slots.entries());
+        const snapshot = [...this._slots.entries()]; // Array.from(this._slots.entries());
         // 收集所有异步操作的Promise
         const promises: Promise<void>[] = [];
         for (const [id, slot] of snapshot) {
