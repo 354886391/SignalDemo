@@ -1,3 +1,5 @@
+type SlotFunc<T extends (...args: any[]) => void> = T;
+
 export class Signal {
 
     signalName: string = '';
@@ -6,7 +8,7 @@ export class Signal {
 
     }
 
-    connect(signalName: string, target: any, options?: any): void {
+    connect<T extends (...args: any[]) => void>(signalName: string | SlotFunc<T>, target: any, options?: any): void {
     }
 }
 

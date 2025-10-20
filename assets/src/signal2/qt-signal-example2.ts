@@ -55,11 +55,12 @@ class Example extends Signal {
         // 创建信号发射器和槽接收器
         this.tom = new Tom();
         this.jerry = new Jerry();
-        // 连接信号和槽函数
+        // 连接信号和槽函数(多种连接方式示例)
         this.tom.connect(miaowed, this.jerry);
-        this.tom.connect(miaowed, this.jerry);
-        this.tom.connect(miaowed, this.jerry);
-        this.tom.connect(hovered, this.jerry);
+        this.tom.connect(this.jerry.onRunaway, this.jerry);
+        
+        this.tom.connect(miaowed, this.jerry, { once: true });
+        this.tom.connect(hovered, this.jerry, { queued: true });
 
         console.log('\n--- 触发信号 ---');
         this.tom.miaow();
