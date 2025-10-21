@@ -180,11 +180,15 @@ export class Signal {
     private static getName<T extends (...args: any[]) => void>(signal: T | string): string {
         let signalName: string;
         if (typeof signal === 'function') {
-            // 如果传入的是函数引用，使用函数名作为信号名
-            signalName = signal.name;
-            // 如果函数名是anonymous或空字符串，尝试使用函数对象的signalName属性
-            if (signalName === 'anonymous' || signalName === '') {
-                signalName = signal['signalName'] || 'unknown';
+            // 如果传入的是函数引用，优先使用signalName属性
+            if (signal['signalName']) {
+                signalName = signal['signalName'];
+            } else {
+                // 降级使用函数名作为信号名
+                signalName = signal.name;
+                if (signalName === 'anonymous' || signalName === '') {
+                    signalName = 'unknown';
+                }
             }
         } else {
             // 如果传入的是字符串，直接使用该字符串作为信号名
@@ -202,18 +206,43 @@ export class Signal {
  * 信号装饰器 - 用于定义信号属性
  * @param signalName 可选的信号名称，如果不提供则使用属性名
  */
-
 export function signal(signalName?: string) {
     return function (target: any, prop: string) {
-        // 如果没有提供signalName，使用属性名作为信号名
-        const finalName = signalName || prop;
+        // 使用WeakMap存储每个实例的信号函数缓存
+        const signalCache = new WeakMap<any, Record<string, Function>>();
+        
+        // 使用Symbol作为内部属性键，避免属性名冲突
+        const instanceSignalsKey = Symbol(`__${prop}_signals`);
+        
         // 使用属性描述符来定义信号属性
         Object.defineProperty(target, prop, {
-            get: () => {
-                // // 简化：直接创建函数并设置signalName属性
-                const anonymous = function () { };
-                anonymous.signalName = finalName;
-                return anonymous;
+            get: function() {
+                // 获取当前实例的构造函数名称
+                const className = this.constructor.name;
+                
+                // 如果实例没有信号缓存，创建一个
+                if (!signalCache.has(this)) {
+                    signalCache.set(this, {});
+                }
+                
+                const instanceSignals = signalCache.get(this)!;
+                
+                // 如果当前信号函数已缓存，直接返回
+                if (!instanceSignals[prop]) {
+                    // 确定最终的信号名称，格式为：类名.信号名
+                    const finalSignalName = signalName 
+                        ? `${className}.${signalName}` 
+                        : `${className}.${prop}`;
+                    
+                    // 创建信号函数并设置唯一的信号名
+                    const anonymous = function() {};
+                    anonymous.signalName = finalSignalName;
+                    
+                    // 缓存信号函数
+                    instanceSignals[prop] = anonymous;
+                }
+                
+                return instanceSignals[prop];
             },
             enumerable: true,
             configurable: true

@@ -7,7 +7,7 @@ const miaowed = '123';
 class Tom {
 
     // 定义信号miaowed，参数类型为(id: number, msg: string)
-    @signal(miaowed)
+    @signal()
     miaowed: (id: number, msg: string) => void;
     // 定义信号hovered，参数类型为(isHovered: boolean)
     @signal()
@@ -60,7 +60,7 @@ class Example {
         this.jerry = new Jerry();
 
         // 连接信号和槽函数
-        Signal.connect(miaowed, this.jerry.onRunaway, this.jerry);
+        Signal.connect(this.tom.miaowed, this.jerry.onRunaway, this.jerry);
         Signal.connect(this.tom.miaowed, this.jerry.onRunawayOnce, this.jerry, { once: true });
         Signal.connect(this.tom.miaowed, this.jerry.onRunawayQueued, this.jerry, { queued: true });
         Signal.connect(this.tom.hovered, this.jerry.onHover, this.jerry);
