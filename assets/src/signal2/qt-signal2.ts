@@ -21,7 +21,7 @@ export class Connection {
 }
 
 // 定义槽函数类型
-export type SlotFunc<T extends (...args: any[]) => void> = T;
+type SlotFunc<T extends (...args: any[]) => void> = T;
 
 // 定义槽函数项接口
 interface Slot<T extends (...args: any[]) => void> {
@@ -35,9 +35,6 @@ interface Slot<T extends (...args: any[]) => void> {
 // 槽ID计数器
 let _nextId: number = 1;
 
-/**
- * Signal类 - 实现信号槽机制的核心类（单例模式）
- */
 export class Signal {
 
     // 使用Map存储每个信号名对应的所有槽函数
@@ -54,8 +51,7 @@ export class Signal {
 
         // 获取该信号对应的所有槽函数
         const slots = this._slots.get(signalName);
-        if (!slots) {
-            console.log(`No slots found for signal: ${signalName}`);
+        if (!slots || slots.length === 0) {
             return;
         }
 
@@ -66,31 +62,16 @@ export class Signal {
         for (const slot of slotsSnapshot) {
             if (slot.once) {
                 // 立即处理一次性槽函数的移除
-                this.disconnect(signalName, slot.callback, slot.target);
+                this.disconnectById(signalName, slot.id);
             }
-            const executeCallback = () => {
-                try {
-                    if (slot.target) {
-                        slot.callback.apply(slot.target, args);
-                    } else {
-                        slot.callback(...args);
-                    }
-                } catch (error) {
-                    // 捕获错误但不影响其他槽的执行
-                    setTimeout(() => {
-                        console.error(`Error in slot function for signal ${signalName || 'unnamed'}:`, error);
-                        // 在实际应用中，你可能需要更复杂的错误处理策略
-                    }, 0);
-                }
-            };
             if (slot.queued) {
                 // 异步调用（队列连接）
                 setTimeout(() => {
-                    executeCallback();
+                    this.executeSlot(slot, args);
                 }, 0);
             } else {
                 // 同步调用
-                executeCallback();
+                this.executeSlot(slot, args);
             }
         }
     }
@@ -103,17 +84,14 @@ export class Signal {
      * @param options 连接选项
      */
     static connect<T extends (...args: any[]) => void>(signal: T | string, slotFunc: SlotFunc<T>, target?: any, options?: SlotOptions): Connection {
-        const opts = {
-            once: options?.once || false,
-            queued: options?.queued || false
-        };
-
         // 确定信号名称
-        let signalName = this.getName(signal);
-
+        const signalName = this.getName(signal);
         // 绑定目标对象到回调函数
         const boundCallback = target ? slotFunc.bind(target) : slotFunc;
-
+        const opts = {
+            once: !!(options && options.once),
+            queued: !!(options && options.queued)
+        };
         // 使用指定的信号名连接槽函数
         return this.addSlot(signalName, boundCallback, target || null, opts);
     }
@@ -126,7 +104,7 @@ export class Signal {
      */
     static disconnect<T extends (...args: any[]) => void>(signal: T | string, slotFunc: SlotFunc<T>, target?: any): void {
         // 确定信号名称
-        let signalName = this.getName(signal);
+        const signalName = this.getName(signal);
 
         const slots = this._slots.get(signalName);
         if (!slots) return;
@@ -145,6 +123,20 @@ export class Signal {
         }
     }
 
+    static disconnectById(signalName: string, id: number): void {
+        const slots = this._slots.get(signalName);
+        if (!slots) return;
+
+        // 过滤掉匹配的槽函数
+        const updatedSlots = slots.filter(slot => slot.id !== id);
+
+        if (updatedSlots.length > 0) {
+            this._slots.set(signalName, updatedSlots);
+        } else {
+            this._slots.delete(signalName);
+        }
+    }
+
     /**
      * 添加槽函数的辅助方法
      * @param signalName 信号名称
@@ -156,9 +148,12 @@ export class Signal {
         if (!this._slots.has(signalName)) {
             this._slots.set(signalName, []);
         }
+        // 增加ID并创建槽函数
+        const id = ++_nextId;
         // 添加槽函数到信号映射
-        this._slots?.get(signalName).push({
-            id: ++_nextId,
+        const slots = this._slots.get(signalName)!;
+        slots.push({
+            id: id,
             callback: callback,
             target: target,
             once: options?.once || false,
@@ -167,7 +162,19 @@ export class Signal {
         const disconnect = () => {
             this.disconnect(signalName, callback, target);
         };
-        return new Connection(_nextId, disconnect);
+        return new Connection(id, disconnect);
+    }
+
+    private static executeSlot<T extends (...args: any[]) => void>(slot: Slot<T>, args: Parameters<T>): void {
+        try {
+            if (slot.target) {
+                slot.callback.apply(slot.target, args);
+            } else {
+                slot.callback(...args);
+            }
+        } catch (error) {
+            console.error(`Error in slot function for signal ${slot['signalName'] || 'unnamed'}:`, error);
+        }
     }
 
     private static getName<T extends (...args: any[]) => void>(signal: T | string): string {
@@ -185,6 +192,10 @@ export class Signal {
         }
         return signalName;
     }
+
+    static get hasSlots() { return this._slots.size > 0; }
+
+    static get slotCount() { return this._slots.size; }
 }
 
 /**
@@ -199,8 +210,8 @@ export function signal(signalName?: string) {
         // 使用属性描述符来定义信号属性
         Object.defineProperty(target, prop, {
             get: () => {
-                // 简化：直接创建函数并设置signalName属性
-                const anonymous = () => { };
+                // // 简化：直接创建函数并设置signalName属性
+                const anonymous = function () { };
                 anonymous.signalName = finalName;
                 return anonymous;
             },
