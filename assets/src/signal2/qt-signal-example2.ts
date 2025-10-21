@@ -11,6 +11,10 @@ class Tom {
     @signal()
     hovered: (isHovered: boolean) => void;
 
+    @signal()
+    hovered_forward: (isHovered: boolean) => void;
+
+
     /**
      *  触发喵喵信号的方法
      * 
@@ -26,6 +30,10 @@ class Tom {
      */
     hover(isHovered: boolean) {
         Signal.emit(this.hovered, isHovered);     // 此处emit应该自动推断出hovered的参数类型(isHovered: boolean)
+    }
+
+    forward(isHovered: boolean) {
+        Signal.emit(this.hovered_forward, isHovered);     // 此处emit应该自动推断出hovered的参数类型(isHovered: boolean)
     }
 }
 
@@ -46,6 +54,10 @@ class Jerry {
     onHover(isHovered: boolean) {
         console.log(this.constructor.name + ' received hover: ' + (isHovered ? 'true' : 'false'));
     }
+
+    onHover_forward(isHovered: boolean) {
+        console.log(this.constructor.name + ' received hover2: ' + (isHovered ? 'true' : 'false'));
+    }
 }
 
 class Example {
@@ -61,7 +73,8 @@ class Example {
         Signal.connect(miaowed, this.jerry.onRunaway, this.jerry);
         Signal.connect(this.tom.miaowed, this.jerry.onRunawayOnce, this.jerry, { once: true });
         Signal.connect(this.tom.miaowed, this.jerry.onRunawayQueued, this.jerry, { queued: true });
-        Signal.connect(this.tom.hovered, this.jerry.onHover, this.jerry);
+        // Signal.connect(this.tom.hovered, this.jerry.onHover, this.jerry);
+        Signal.connect(this.tom.hovered_forward, this.jerry.onHover_forward, this.jerry);
 
         console.log('\n--- 触发信号 ---');
         this.tom.miaow();
@@ -72,6 +85,16 @@ class Example {
         console.log('\n--- 触发信号 ---');
         this.tom.hover(true);
         this.tom.hover(false);
+
+        console.log('\n--- 信号转发 ---');
+        const connection = Signal.forwardTo(this.tom.hovered, this.tom.hovered_forward);
+        this.tom.hover(true);
+        this.tom.forward(false);
+
+        console.log('\n--- 断开信号转发连接 ---');
+        connection.disconnect();
+        this.tom.hover(true);
+        this.tom.forward(false);
     }
 }
 

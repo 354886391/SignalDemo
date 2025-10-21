@@ -137,6 +137,23 @@ export class Signal {
         }
     }
 
+     /**
+     * 将一个信号转发到另一个信号
+     * @param sourceSignal 源信号（字符串名称或函数引用）
+     * @param targetSignal 目标信号（字符串名称或函数引用）
+     * @param options 连接选项
+     * @returns 连接对象，可用于断开转发
+     */
+    static forwardTo<T extends (...args: any[]) => void>(sourceSignal: T | string, targetSignal: T | string, options?: SlotOptions): Connection {
+        // 创建转发函数，将源信号的参数转发到目标信号
+        const forwarder = (...args: Parameters<T>) => {
+            this.emit(targetSignal, ...args);
+        };
+        
+        // 连接源信号和转发函数
+        return this.connect(sourceSignal, forwarder, undefined, options);
+    }
+
     /**
      * 添加槽函数的辅助方法
      * @param signalName 信号名称

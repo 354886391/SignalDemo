@@ -151,7 +151,7 @@ export class Signal<T extends (...args: any[]) => void> {
     forwardTo<T extends (...args: any[]) => void>(other: Signal<T>, options?: SlotOptions) {
         const forwarder = (...args: Parameters<T>) => {
             other.emit.apply(other, args as any);
-        };
+        } ;
         return this.connect(forwarder as any, undefined, options);
     }
 }
