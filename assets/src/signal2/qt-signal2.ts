@@ -2,6 +2,8 @@
 export interface SlotOptions {
     once?: boolean;      // 自动断开（只调用一次）
     queued?: boolean;    // 异步调用（类似 Qt::QueuedConnection）
+    throttle?: number;   // 节流时间（毫秒）
+    debounce?: number;   // 防抖时间（毫秒
 }
 
 export class Connection {
@@ -30,6 +32,10 @@ interface Slot<T extends (...args: any[]) => void> {
     target: any;
     once: boolean;
     queued: boolean;
+    throttle?: number;   // 节流时间（毫秒）
+    debounce?: number;   // 防抖时间（毫秒）
+    lastCallTime?: number; // 上次调用时间（用于节流）
+    timeoutId?: number;    // 超时ID（用于防抖）
 }
 
 // 槽ID计数器
@@ -89,11 +95,35 @@ export class Signal {
         // 绑定目标对象到回调函数
         const boundCallback = target ? slotFunc.bind(target) : slotFunc;
         const opts = {
-            once: !!(options && options.once),
-            queued: !!(options && options.queued)
+            once: options?.once,
+            queued: options?.queued,
+            throttle: options?.throttle,
+            debounce: options?.debounce,
         };
         // 使用指定的信号名连接槽函数
         return this.addSlot(signalName, boundCallback, target || null, opts);
+    }
+
+    /**
+ * 连接信号和槽函数（带节流功能）
+ * @param signal 信号名或信号函数引用
+ * @param slotFunc 槽函数引用
+ * @param target 槽函数目标对象
+ * @param wait 节流等待时间（毫秒）
+ */
+    static connectThrottled<T extends (...args: any[]) => void>(signal: T | string, slotFunc: SlotFunc<T>, target?: any, wait: number = 100): Connection {
+        return this.connect(signal, slotFunc, target, { throttle: wait });
+    }
+
+    /**
+     * 连接信号和槽函数（带防抖功能）
+     * @param signal 信号名或信号函数引用
+     * @param slotFunc 槽函数引用
+     * @param target 槽函数目标对象
+     * @param wait 防抖等待时间（毫秒）
+     */
+    static connectDebounced<T extends (...args: any[]) => void>(signal: T | string, slotFunc: SlotFunc<T>, target?: any, wait: number = 100): Connection {
+        return this.connect(signal, slotFunc, target, { debounce: wait });
     }
 
     /**
@@ -187,7 +217,9 @@ export class Signal {
             callback: callback,
             target: target,
             once: options?.once || false,
-            queued: options?.queued || false
+            queued: options?.queued || false,
+            throttle: options?.throttle || undefined,
+            debounce: options?.debounce || undefined,
         });
         const disconnect = () => {
             this.disconnect(signalName, callback, target);
@@ -197,6 +229,36 @@ export class Signal {
 
     private static executeSlot<T extends (...args: any[]) => void>(slot: Slot<T>, args: Parameters<T>): void {
         try {
+
+            // 处理节流
+            if (slot.throttle) {
+                const now = Date.now();
+                // 如果距离上次调用的时间小于节流时间，则不执行
+                if (slot.lastCallTime && (now - slot.lastCallTime) < slot.throttle) {
+                    return;
+                }
+                slot.lastCallTime = now;
+            }
+            // 处理防抖
+            if (slot.debounce) {
+                // 清除之前的超时
+                if (slot.timeoutId) {
+                    clearTimeout(slot.timeoutId);
+                }
+                // 设置新的超时
+                slot.timeoutId = window.setTimeout(() => {
+                    if (slot.target) {
+                        slot.callback.apply(slot.target, args);
+                    } else {
+                        slot.callback(...args);
+                    }
+                    // 执行后清理超时ID
+                    slot.timeoutId = undefined;
+                }, slot.debounce);
+                // 不立即执行
+                return;
+            }
+            // 正常执行回调
             if (slot.target) {
                 slot.callback.apply(slot.target, args);
             } else {
