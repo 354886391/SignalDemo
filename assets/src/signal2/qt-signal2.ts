@@ -1,12 +1,3 @@
-// 定义槽函数选项接口
-export interface SlotOptions {
-    once?: boolean;      // 自动断开（只调用一次）
-    queued?: boolean;    // 异步调用（类似 Qt::QueuedConnection）
-    throttle?: number;   // 节流时间（毫秒）
-    debounce?: number;   // 防抖时间（毫秒）
-    group?: string;      // 分组名称，用于信号分组管理
-}
-
 export class Connection {
     private _disconnect?: () => void;
     readonly id: number;
@@ -27,17 +18,27 @@ export class Connection {
 type SlotFunc<T extends (...args: any[]) => void> = T;
 
 // 定义槽函数项接口
-interface Slot<T extends (...args: any[]) => void> {
+interface SlotInfo<T extends (...args: any[]) => void> {
     id: number;
     callback: SlotFunc<T>;
     target: any;
     once: boolean;
     queued: boolean;
+    group?: string;        // 分组名称
+
     throttle?: number;   // 节流时间（毫秒）
     debounce?: number;   // 防抖时间（毫秒）
     lastCallTime?: number; // 上次调用时间（用于节流）
     timeoutId?: number;    // 超时ID（用于防抖）
-    group?: string;        // 分组名称
+}
+
+// 定义槽函数选项接口
+export interface SlotOptions {
+    once?: boolean;      // 自动断开（只调用一次）
+    queued?: boolean;    // 异步调用（类似 Qt::QueuedConnection）
+    group?: string;      // 分组名称，用于信号分组管理
+    throttle?: number;   // 节流时间（毫秒）
+    debounce?: number;   // 防抖时间（毫秒）
 }
 
 // 槽ID计数器
@@ -46,18 +47,18 @@ let _nextId: number = 1;
 export class Signal {
 
     // 使用Map存储每个信号名对应的所有槽函数
-    private static _slots = new Map<string, Slot<any>[]>();
+    private static _slots = new Map<string, SlotInfo<any>[]>();
 
-    // 新增：使用Map存储分组名到信号槽ID的映射，提高分组操作性能
+    // 使用Map存储分组名到信号槽ID的映射，提高分组操作性能
     private static _groupSlotMap = new Map<string, Set<{ signalName: string, slotId: number }>>();
 
-    // 新增：分组信息缓存，避免频繁计算
+    // 分组信息缓存，避免频繁计算
     private static _groupCache: {
         groups?: string[];
         lastUpdateTime: number;
     } = { lastUpdateTime: 0 };
 
-    // 新增：缓存有效期（毫秒）
+    // 缓存有效期（毫秒）
     private static readonly CACHE_TTL = 100;
 
     /**
@@ -127,12 +128,12 @@ export class Signal {
     }
 
     /**
- * 连接信号和槽函数（带节流功能）
- * @param signal 信号名或信号函数引用
- * @param slotFunc 槽函数引用
- * @param target 槽函数目标对象
- * @param wait 节流等待时间（毫秒）
- */
+     * 连接信号和槽函数（带节流功能）
+     * @param signal 信号名或信号函数引用
+     * @param slotFunc 槽函数引用
+     * @param target 槽函数目标对象
+     * @param wait 节流等待时间（毫秒）
+    */
     static connectThrottled<T extends (...args: any[]) => void>(signal: T | string, slotFunc: SlotFunc<T>, target?: any, wait: number = 100): Connection {
         return this.connect(signal, slotFunc, target, { throttle: wait });
     }
@@ -182,7 +183,7 @@ export class Signal {
         // 过滤掉匹配的槽函数
         const updatedSlots = slots.filter(slot => {
             const shouldRemove = slot.id === id;
-            // 新增：如果有分组，从分组映射中移除
+            // 如果有分组，从分组映射中移除
             if (shouldRemove && slot.group) {
                 this._removeFromGroupMap(signalName, id, slot.group);
             }
@@ -195,7 +196,7 @@ export class Signal {
             this._slots.delete(signalName);
         }
 
-        // 新增：清除缓存
+        // 清除缓存
         this._invalidateCache();
     }
 
@@ -209,7 +210,7 @@ export class Signal {
             throw new Error('Group name must be a non-empty string');
         }
 
-        // 新增：使用分组映射进行高效断开
+        // 使用分组映射进行高效断开
         const groupSlots = this._groupSlotMap.get(groupName);
         if (!groupSlots) return;
 
@@ -241,7 +242,7 @@ export class Signal {
             return 0;
         }
 
-        // 新增：使用分组映射直接获取数量，避免遍历所有槽
+        // 使用分组映射直接获取数量，避免遍历所有槽
         const groupSlots = this._groupSlotMap.get(groupName);
         return groupSlots ? groupSlots.size : 0;
     }
@@ -257,7 +258,7 @@ export class Signal {
             return false;
         }
 
-        // 新增：使用分组映射直接检查，避免遍历所有槽
+        // 使用分组映射直接检查，避免遍历所有槽
         const groupSlots = this._groupSlotMap.get(groupName);
         return groupSlots ? groupSlots.size > 0 : false;
     }
@@ -267,7 +268,7 @@ export class Signal {
      * @returns 所有分组名称的数组
      */
     static getAllGroups(): string[] {
-        // 新增：使用缓存优化频繁调用
+        // 使用缓存优化频繁调用
         const now = Date.now();
         if (this._groupCache.groups && (now - this._groupCache.lastUpdateTime) < this.CACHE_TTL) {
             return [...this._groupCache.groups];
@@ -287,7 +288,7 @@ export class Signal {
     }
 
     /**
-     * 新增：获取指定分组中的所有信号名称
+     * 获取指定分组中的所有信号名称
      * @param groupName 分组名称
      * @returns 该分组中所有信号名称的数组
      */
@@ -310,7 +311,7 @@ export class Signal {
         return Array.from(signalNames);
     }
 
-    // 新增：内部方法 - 添加到分组映射
+    // 内部方法 - 添加到分组映射
     private static _addToGroupMap(signalName: string, slotId: number, groupName: string): void {
         if (!this._groupSlotMap.has(groupName)) {
             this._groupSlotMap.set(groupName, new Set());
@@ -319,7 +320,7 @@ export class Signal {
         groupSlots.add({ signalName, slotId });
     }
 
-    // 新增：内部方法 - 从分组映射中移除
+    // 内部方法 - 从分组映射中移除
     private static _removeFromGroupMap(signalName: string, slotId: number, groupName: string): void {
         const groupSlots = this._groupSlotMap.get(groupName);
         if (groupSlots) {
@@ -337,14 +338,14 @@ export class Signal {
         }
     }
 
-    // 新增：内部方法 - 使缓存失效
+    // 内部方法 - 使缓存失效
     private static _invalidateCache(): void {
         this._groupCache.groups = undefined;
         this._groupCache.lastUpdateTime = 0;
     }
 
     /**
-     * 新增：重置所有信号和分组（用于测试或清理）
+     * 重置所有信号和分组（用于测试或清理）
      */
     static reset(): void {
         this._slots.clear();
@@ -410,7 +411,7 @@ export class Signal {
 
         // 添加槽函数到信号映射
         const slots = this._slots.get(signalName)!;
-        const slot: Slot<T> = {
+        const slot: SlotInfo<T> = {
             id: id,
             callback: callback,
             target: target,
@@ -422,12 +423,12 @@ export class Signal {
         };
         slots.push(slot);
 
-        // 新增：如果有分组，添加到分组映射中
+        // 如果有分组，添加到分组映射中
         if (group) {
             this._addToGroupMap(signalName, id, group);
         }
 
-        // 新增：清除缓存
+        // 清除缓存
         this._invalidateCache();
 
         const disconnect = () => {
@@ -437,7 +438,7 @@ export class Signal {
     }
 
 
-    private static executeSlot<T extends (...args: any[]) => void>(slot: Slot<T>, args: Parameters<T>): void {
+    private static executeSlot<T extends (...args: any[]) => void>(slot: SlotInfo<T>, args: Parameters<T>): void {
         try {
 
             // 处理节流

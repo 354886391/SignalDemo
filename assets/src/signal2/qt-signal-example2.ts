@@ -108,4 +108,4 @@ class Example {
     }
 }
 
-var example = new Example();
+// var example = new Example();
