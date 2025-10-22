@@ -17,14 +17,12 @@ export class Connection {
 // 定义槽函数类型
 type SlotFunc<T extends (...args: any[]) => void> = T;
 
+type GroupInfo = Set<{ signalName: string, slotId: number }>;
+
 interface SignalInfo {
     slots: SlotInfo<any>[],
-    /**key: 分组名称, value: 槽函数ID集合 */
+    /**key: groupName, value: slotId集合 */
     groups: Map<string, Set<number>>
-}
-
-interface GroupInfo {
-    group: Set<{ signalName: string, slotId: number }>;
 }
 
 // 定义槽函数项接口
@@ -57,21 +55,20 @@ let _nextId: number = 1;
 /**
  * 信号系统核心类 - 类似于Qt的信号槽机制
  */
+// 修改_groupCache的定义
 export class Signal {
+
     // 缓存相关配置
     private static readonly CACHE_TTL = 100; // 缓存有效期（毫秒）
 
     // 分组信息缓存，避免频繁计算
-    private static _groupCache: {
-        groups?: string[];
-        lastUpdateTime: number;
-    } = { lastUpdateTime: 0 };
+    private static _groupCache: { groups?: string[]; lastUpdateTime: number; } = { lastUpdateTime: 0 };
 
     // 优化：合并数据结构为复合结构
     private static _signals: Map<string, SignalInfo> = new Map();
 
     // 全局分组映射（分组名 -> 信号槽关联集合）groupName -> { signalName: string, slotId: number }
-    private static _globalGroups: Map<string, Set<{ signalName: string, slotId: number }>> = new Map();
+    private static _globalGroups: Map<string, GroupInfo> = new Map();
 
     /**
      * 触发信号
