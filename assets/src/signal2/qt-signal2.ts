@@ -17,6 +17,12 @@ export class Connection {
 // 定义槽函数类型
 type SlotFunc<T extends (...args: any[]) => void> = T;
 
+interface SignalInfo {
+    slots: SlotInfo<any>[],
+    /**key: 分组名称, value: 槽函数ID集合 */
+    groups: Map<string, Set<number>>
+}
+
 // 定义槽函数项接口
 interface SlotInfo<T extends (...args: any[]) => void> {
     id: number;
@@ -33,7 +39,7 @@ interface SlotInfo<T extends (...args: any[]) => void> {
 }
 
 // 定义槽函数选项接口
-export interface SlotOptions {
+interface SlotOptions {
     once?: boolean;      // 自动断开（只调用一次）
     queued?: boolean;    // 异步调用（类似 Qt::QueuedConnection）
     group?: string;      // 分组名称，用于信号分组管理
@@ -46,11 +52,13 @@ let _nextId: number = 1;
 
 export class Signal {
 
-    // 使用Map存储每个信号名对应的所有槽函数
-    private static _slots = new Map<string, SlotInfo<any>[]>();
+    // 重构数据结构，使用一个复合的Map替代两个独立的Map
+    // slots: 信号对应的槽函数列表
+    // groups: 信号内部分组映射：groupName -> Set<slotId>
+    private static _signals = new Map<string, SignalInfo>();
 
-    // 使用Map存储分组名到信号槽ID的映射，提高分组操作性能
-    private static _groupSlotMap = new Map<string, Set<{ signalName: string, slotId: number }>>();
+    // 全局分组映射：groupName -> Map<signalName, Set<slotId>>
+    private static _globalGroups = new Map<string, Map<string, Set<number>>>();
 
     // 分组信息缓存，避免频繁计算
     private static _groupCache: {
@@ -71,13 +79,13 @@ export class Signal {
         let signalName = this.getName(signal);
 
         // 获取该信号对应的所有槽函数
-        const slots = this._slots.get(signalName);
-        if (!slots || slots.length === 0) {
+        const signalData = this._signals.get(signalName);
+        if (!signalData || signalData.slots.length === 0) {
             return;
         }
 
         // 创建一个副本，以避免在触发过程中修改列表
-        const slotsSnapshot = [...slots];
+        const slotsSnapshot = [...signalData.slots];
 
         // 依次调用每个槽函数
         for (const slot of slotsSnapshot) {
@@ -159,41 +167,104 @@ export class Signal {
         // 确定信号名称
         const signalName = this.getName(signal);
 
-        const slots = this._slots.get(signalName);
-        if (!slots) return;
+        const signalData = this._signals.get(signalName);
+        if (!signalData) return;
 
         // 过滤掉匹配的槽函数
-        const updatedSlots = slots.filter(slot => {
-            // 保留不匹配的槽函数
-            return slot.callback !== slotFunc || (target && slot.target !== target);
-        });
+        const slotsToKeep = [];
+        const slotsToRemove: Array<{ id: number, group?: string }> = [];
 
-        // 更新信号映射
-        if (updatedSlots.length > 0) {
-            this._slots.set(signalName, updatedSlots);
-        } else {
-            this._slots.delete(signalName);
+        for (const slot of signalData.slots) {
+            if (slot.callback === slotFunc && (!target || slot.target === target)) {
+                // 记录需要移除的槽
+                slotsToRemove.push({ id: slot.id, group: slot.group });
+            } else {
+                // 保留不匹配的槽函数
+                slotsToKeep.push(slot);
+            }
         }
+
+        // 更新信号数据
+        signalData.slots = slotsToKeep;
+
+        // 如果信号没有槽函数了，删除该信号
+        if (signalData.slots.length === 0) {
+            this._signals.delete(signalName);
+        }
+
+        // 处理分组信息
+        for (const { id, group } of slotsToRemove) {
+            if (group) {
+                // 从信号内部分组映射中移除
+                if (signalData.groups.has(group)) {
+                    const groupSlots = signalData.groups.get(group)!;
+                    groupSlots.delete(id);
+                    if (groupSlots.size === 0) {
+                        signalData.groups.delete(group);
+                    }
+                }
+
+                // 从全局分组映射中移除
+                const globalGroupData = this._globalGroups.get(group);
+                if (globalGroupData && globalGroupData.has(signalName)) {
+                    const signalSlots = globalGroupData.get(signalName)!;
+                    signalSlots.delete(id);
+                    if (signalSlots.size === 0) {
+                        globalGroupData.delete(signalName);
+                        if (globalGroupData.size === 0) {
+                            this._globalGroups.delete(group);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 清除缓存
+        this._invalidateCache();
     }
 
     static disconnectById(signalName: string, id: number): void {
-        const slots = this._slots.get(signalName);
-        if (!slots) return;
+        const signalData = this._signals.get(signalName);
+        if (!signalData) return;
 
-        // 过滤掉匹配的槽函数
-        const updatedSlots = slots.filter(slot => {
-            const shouldRemove = slot.id === id;
-            // 如果有分组，从分组映射中移除
-            if (shouldRemove && slot.group) {
-                this._removeFromGroupMap(signalName, id, slot.group);
+        // 找到要移除的槽函数及其分组
+        const slotIndex = signalData.slots.findIndex(slot => slot.id === id);
+        if (slotIndex === -1) return;
+
+        const slot = signalData.slots[slotIndex];
+        const group = slot.group;
+
+        // 从信号槽列表中移除
+        signalData.slots.splice(slotIndex, 1);
+
+        // 如果有分组，从分组映射中移除
+        if (group) {
+            // 从信号内部分组映射中移除
+            if (signalData.groups.has(group)) {
+                const groupSlots = signalData.groups.get(group)!;
+                groupSlots.delete(id);
+                if (groupSlots.size === 0) {
+                    signalData.groups.delete(group);
+                }
             }
-            return !shouldRemove;
-        });
 
-        if (updatedSlots.length > 0) {
-            this._slots.set(signalName, updatedSlots);
-        } else {
-            this._slots.delete(signalName);
+            // 从全局分组映射中移除
+            const globalGroupData = this._globalGroups.get(group);
+            if (globalGroupData && globalGroupData.has(signalName)) {
+                const signalSlots = globalGroupData.get(signalName)!;
+                signalSlots.delete(id);
+                if (signalSlots.size === 0) {
+                    globalGroupData.delete(signalName);
+                    if (globalGroupData.size === 0) {
+                        this._globalGroups.delete(group);
+                    }
+                }
+            }
+        }
+
+        // 如果信号没有槽函数了，删除该信号
+        if (signalData.slots.length === 0) {
+            this._signals.delete(signalName);
         }
 
         // 清除缓存
@@ -210,21 +281,21 @@ export class Signal {
             throw new Error('Group name must be a non-empty string');
         }
 
-        // 使用分组映射进行高效断开
-        const groupSlots = this._groupSlotMap.get(groupName);
-        if (!groupSlots) return;
+        // 使用全局分组映射进行高效断开
+        const globalGroupData = this._globalGroups.get(groupName);
+        if (!globalGroupData) return;
 
         // 保存需要断开的槽，避免在遍历时修改集合
-        const slotsToDisconnect = Array.from(groupSlots);
+        const slotsToDisconnect: Array<{ signalName: string, slotId: number }> = [];
+        for (const [signalName, slotIds] of globalGroupData.entries()) {
+            for (const slotId of slotIds) {
+                slotsToDisconnect.push({ signalName, slotId });
+            }
+        }
 
         // 断开每个槽的连接
         for (const { signalName, slotId } of slotsToDisconnect) {
             this.disconnectById(signalName, slotId);
-        }
-
-        // 清理空分组
-        if (groupSlots.size === 0) {
-            this._groupSlotMap.delete(groupName);
         }
 
         // 清除缓存
@@ -242,9 +313,15 @@ export class Signal {
             return 0;
         }
 
-        // 使用分组映射直接获取数量，避免遍历所有槽
-        const groupSlots = this._groupSlotMap.get(groupName);
-        return groupSlots ? groupSlots.size : 0;
+        // 使用全局分组映射直接获取数量
+        const globalGroupData = this._globalGroups.get(groupName);
+        if (!globalGroupData) return 0;
+
+        let count = 0;
+        for (const slotIds of globalGroupData.values()) {
+            count += slotIds.size;
+        }
+        return count;
     }
 
     /**
@@ -258,9 +335,17 @@ export class Signal {
             return false;
         }
 
-        // 使用分组映射直接检查，避免遍历所有槽
-        const groupSlots = this._groupSlotMap.get(groupName);
-        return groupSlots ? groupSlots.size > 0 : false;
+        // 使用全局分组映射直接检查
+        const globalGroupData = this._globalGroups.get(groupName);
+        if (!globalGroupData) return false;
+
+        // 检查是否有任何信号在该分组中
+        for (const slotIds of globalGroupData.values()) {
+            if (slotIds.size > 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -275,10 +360,7 @@ export class Signal {
         }
 
         // 获取所有非空分组名称
-        const groups = Array.from(this._groupSlotMap.keys()).filter(groupName => {
-            const slots = this._groupSlotMap.get(groupName);
-            return slots && slots.size > 0;
-        });
+        const groups = Array.from(this._globalGroups.keys());
 
         // 更新缓存
         this._groupCache.groups = groups;
@@ -297,45 +379,31 @@ export class Signal {
             return [];
         }
 
-        const groupSlots = this._groupSlotMap.get(groupName);
-        if (!groupSlots) {
+        const globalGroupData = this._globalGroups.get(groupName);
+        if (!globalGroupData) {
             return [];
         }
 
-        // 使用Set去重
-        const signalNames = new Set<string>();
-        for (const { signalName } of groupSlots) {
-            signalNames.add(signalName);
-        }
-
-        return Array.from(signalNames);
+        return Array.from(globalGroupData.keys());
     }
 
-    // 内部方法 - 添加到分组映射
-    private static _addToGroupMap(signalName: string, slotId: number, groupName: string): void {
-        if (!this._groupSlotMap.has(groupName)) {
-            this._groupSlotMap.set(groupName, new Set());
+    // 内部方法 - 获取或创建信号数据
+    private static _getSignalData(signalName: string) {
+        if (!this._signals.has(signalName)) {
+            this._signals.set(signalName, {
+                slots: [],
+                groups: new Map()
+            });
         }
-        const groupSlots = this._groupSlotMap.get(groupName)!;
-        groupSlots.add({ signalName, slotId });
+        return this._signals.get(signalName)!;
     }
 
-    // 内部方法 - 从分组映射中移除
-    private static _removeFromGroupMap(signalName: string, slotId: number, groupName: string): void {
-        const groupSlots = this._groupSlotMap.get(groupName);
-        if (groupSlots) {
-            // 正确查找并删除槽项，解决对象引用比较问题
-            for (const slot of groupSlots) {
-                if (slot.signalName === signalName && slot.slotId === slotId) {
-                    groupSlots.delete(slot);
-                    break;
-                }
-            }
-            // 如果分组为空，删除该分组
-            if (groupSlots.size === 0) {
-                this._groupSlotMap.delete(groupName);
-            }
+    // 内部方法 - 获取或创建全局分组数据
+    private static _getGlobalGroupData(groupName: string) {
+        if (!this._globalGroups.has(groupName)) {
+            this._globalGroups.set(groupName, new Map());
         }
+        return this._globalGroups.get(groupName)!;
     }
 
     // 内部方法 - 使缓存失效
@@ -348,8 +416,8 @@ export class Signal {
      * 重置所有信号和分组（用于测试或清理）
      */
     static reset(): void {
-        this._slots.clear();
-        this._groupSlotMap.clear();
+        this._signals.clear();
+        this._globalGroups.clear();
         this._invalidateCache();
         _nextId = 1;
     }
@@ -401,16 +469,14 @@ export class Signal {
             throw new Error('Callback must be a function');
         }
 
-        if (!this._slots.has(signalName)) {
-            this._slots.set(signalName, []);
-        }
+        // 获取信号数据
+        const signalData = this._getSignalData(signalName);
 
         // 增加ID并创建槽函数
         const id = ++_nextId;
         const group = options?.group;
 
-        // 添加槽函数到信号映射
-        const slots = this._slots.get(signalName)!;
+        // 添加槽函数
         const slot: SlotInfo<T> = {
             id: id,
             callback: callback,
@@ -421,11 +487,22 @@ export class Signal {
             debounce: options?.debounce || undefined,
             group: group,
         };
-        slots.push(slot);
+        signalData.slots.push(slot);
 
         // 如果有分组，添加到分组映射中
         if (group) {
-            this._addToGroupMap(signalName, id, group);
+            // 更新信号内部分组映射
+            if (!signalData.groups.has(group)) {
+                signalData.groups.set(group, new Set());
+            }
+            signalData.groups.get(group)!.add(id);
+
+            // 更新全局分组映射
+            const globalGroupData = this._getGlobalGroupData(group);
+            if (!globalGroupData.has(signalName)) {
+                globalGroupData.set(signalName, new Set());
+            }
+            globalGroupData.get(signalName)!.add(id);
         }
 
         // 清除缓存
@@ -506,9 +583,15 @@ export class Signal {
         return signalName;
     }
 
-    static get hasSlots() { return this._slots.size > 0; }
+    static get hasSlots() { return this._signals.size > 0; }
 
-    static get slotCount() { return this._slots.size; }
+    static get slotCount() {
+        let count = 0;
+        for (const signalData of this._signals.values()) {
+            count += signalData.slots.length;
+        }
+        return count;
+    }
 }
 
 /**
