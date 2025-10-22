@@ -64,6 +64,10 @@ class Example {
     tom: Tom;
     jerry: Jerry;
 
+    constructor() {
+        this.test();
+    }
+
     test() {
         // 创建信号发射器和槽接收器
         this.tom = new Tom();
@@ -98,10 +102,10 @@ class Example {
         console.log('\n--- 断开信号转发连接 ---');
         connection.disconnect();
         this.tom.hover(true);
+        this.tom.forward(true);
         console.log('\n--- 结束 ---');
 
     }
 }
 
 var example = new Example();
-example.test();

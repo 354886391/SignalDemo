@@ -101,4 +101,4 @@ class App {
 }
 
 // 运行演示
-const app = new App();
+// const app = new App();

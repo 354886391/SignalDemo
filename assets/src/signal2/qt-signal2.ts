@@ -3,7 +3,8 @@ export interface SlotOptions {
     once?: boolean;      // 自动断开（只调用一次）
     queued?: boolean;    // 异步调用（类似 Qt::QueuedConnection）
     throttle?: number;   // 节流时间（毫秒）
-    debounce?: number;   // 防抖时间（毫秒
+    debounce?: number;   // 防抖时间（毫秒）
+    group?: string;      // 分组名称，用于信号分组管理
 }
 
 export class Connection {
@@ -36,6 +37,7 @@ interface Slot<T extends (...args: any[]) => void> {
     debounce?: number;   // 防抖时间（毫秒）
     lastCallTime?: number; // 上次调用时间（用于节流）
     timeoutId?: number;    // 超时ID（用于防抖）
+    group?: string;        // 分组名称
 }
 
 // 槽ID计数器
@@ -45,6 +47,18 @@ export class Signal {
 
     // 使用Map存储每个信号名对应的所有槽函数
     private static _slots = new Map<string, Slot<any>[]>();
+
+    // 新增：使用Map存储分组名到信号槽ID的映射，提高分组操作性能
+    private static _groupSlotMap = new Map<string, Set<{ signalName: string, slotId: number }>>();
+
+    // 新增：分组信息缓存，避免频繁计算
+    private static _groupCache: {
+        groups?: string[];
+        lastUpdateTime: number;
+    } = { lastUpdateTime: 0 };
+
+    // 新增：缓存有效期（毫秒）
+    private static readonly CACHE_TTL = 100;
 
     /**
      * 触发信号
@@ -94,11 +108,19 @@ export class Signal {
         const signalName = this.getName(signal);
         // 绑定目标对象到回调函数
         const boundCallback = target ? slotFunc.bind(target) : slotFunc;
+
+        // 获取信号的默认分组（如果有）
+        let defaultGroup = undefined;
+        if (typeof signal === 'function' && signal?.['__debugInfo']) {
+            defaultGroup = signal?.['__debugInfo'].defaultGroup;
+        }
+
         const opts = {
             once: options?.once,
             queued: options?.queued,
             throttle: options?.throttle,
             debounce: options?.debounce,
+            group: options?.group || defaultGroup,  // 优先使用选项中的分组，否则使用默认分组
         };
         // 使用指定的信号名连接槽函数
         return this.addSlot(signalName, boundCallback, target || null, opts);
@@ -158,13 +180,177 @@ export class Signal {
         if (!slots) return;
 
         // 过滤掉匹配的槽函数
-        const updatedSlots = slots.filter(slot => slot.id !== id);
+        const updatedSlots = slots.filter(slot => {
+            const shouldRemove = slot.id === id;
+            // 新增：如果有分组，从分组映射中移除
+            if (shouldRemove && slot.group) {
+                this._removeFromGroupMap(signalName, id, slot.group);
+            }
+            return !shouldRemove;
+        });
 
         if (updatedSlots.length > 0) {
             this._slots.set(signalName, updatedSlots);
         } else {
             this._slots.delete(signalName);
         }
+
+        // 新增：清除缓存
+        this._invalidateCache();
+    }
+
+    /**
+     * 断开指定分组的所有信号连接
+     * @param groupName 分组名称
+     */
+    static disconnectByGroup(groupName: string): void {
+        // 参数验证
+        if (!groupName || typeof groupName !== 'string') {
+            throw new Error('Group name must be a non-empty string');
+        }
+
+        // 新增：使用分组映射进行高效断开
+        const groupSlots = this._groupSlotMap.get(groupName);
+        if (!groupSlots) return;
+
+        // 保存需要断开的槽，避免在遍历时修改集合
+        const slotsToDisconnect = Array.from(groupSlots);
+
+        // 断开每个槽的连接
+        for (const { signalName, slotId } of slotsToDisconnect) {
+            this.disconnectById(signalName, slotId);
+        }
+
+        // 清理空分组
+        if (groupSlots.size === 0) {
+            this._groupSlotMap.delete(groupName);
+        }
+
+        // 清除缓存
+        this._invalidateCache();
+    }
+
+    /**
+     * 获取指定分组的连接数量
+     * @param groupName 分组名称
+     * @returns 该分组中的连接数量
+     */
+    static getConnectionCountByGroup(groupName: string): number {
+        // 参数验证
+        if (!groupName || typeof groupName !== 'string') {
+            return 0;
+        }
+
+        // 新增：使用分组映射直接获取数量，避免遍历所有槽
+        const groupSlots = this._groupSlotMap.get(groupName);
+        return groupSlots ? groupSlots.size : 0;
+    }
+
+    /**
+     * 检查指定分组是否存在连接
+     * @param groupName 分组名称
+     * @returns 是否存在连接
+     */
+    static hasConnectionsInGroup(groupName: string): boolean {
+        // 参数验证
+        if (!groupName || typeof groupName !== 'string') {
+            return false;
+        }
+
+        // 新增：使用分组映射直接检查，避免遍历所有槽
+        const groupSlots = this._groupSlotMap.get(groupName);
+        return groupSlots ? groupSlots.size > 0 : false;
+    }
+
+    /**
+     * 获取所有分组名称
+     * @returns 所有分组名称的数组
+     */
+    static getAllGroups(): string[] {
+        // 新增：使用缓存优化频繁调用
+        const now = Date.now();
+        if (this._groupCache.groups && (now - this._groupCache.lastUpdateTime) < this.CACHE_TTL) {
+            return [...this._groupCache.groups];
+        }
+
+        // 获取所有非空分组名称
+        const groups = Array.from(this._groupSlotMap.keys()).filter(groupName => {
+            const slots = this._groupSlotMap.get(groupName);
+            return slots && slots.size > 0;
+        });
+
+        // 更新缓存
+        this._groupCache.groups = groups;
+        this._groupCache.lastUpdateTime = now;
+
+        return [...groups];
+    }
+
+    /**
+     * 新增：获取指定分组中的所有信号名称
+     * @param groupName 分组名称
+     * @returns 该分组中所有信号名称的数组
+     */
+    static getSignalsInGroup(groupName: string): string[] {
+        if (!groupName || typeof groupName !== 'string') {
+            return [];
+        }
+
+        const groupSlots = this._groupSlotMap.get(groupName);
+        if (!groupSlots) {
+            return [];
+        }
+
+        // 使用Set去重
+        const signalNames = new Set<string>();
+        for (const { signalName } of groupSlots) {
+            signalNames.add(signalName);
+        }
+
+        return Array.from(signalNames);
+    }
+
+    // 新增：内部方法 - 添加到分组映射
+    private static _addToGroupMap(signalName: string, slotId: number, groupName: string): void {
+        if (!this._groupSlotMap.has(groupName)) {
+            this._groupSlotMap.set(groupName, new Set());
+        }
+        const groupSlots = this._groupSlotMap.get(groupName)!;
+        groupSlots.add({ signalName, slotId });
+    }
+
+    // 新增：内部方法 - 从分组映射中移除
+    private static _removeFromGroupMap(signalName: string, slotId: number, groupName: string): void {
+        const groupSlots = this._groupSlotMap.get(groupName);
+        if (groupSlots) {
+            // 正确查找并删除槽项，解决对象引用比较问题
+            for (const slot of groupSlots) {
+                if (slot.signalName === signalName && slot.slotId === slotId) {
+                    groupSlots.delete(slot);
+                    break;
+                }
+            }
+            // 如果分组为空，删除该分组
+            if (groupSlots.size === 0) {
+                this._groupSlotMap.delete(groupName);
+            }
+        }
+    }
+
+    // 新增：内部方法 - 使缓存失效
+    private static _invalidateCache(): void {
+        this._groupCache.groups = undefined;
+        this._groupCache.lastUpdateTime = 0;
+    }
+
+    /**
+     * 新增：重置所有信号和分组（用于测试或清理）
+     */
+    static reset(): void {
+        this._slots.clear();
+        this._groupSlotMap.clear();
+        this._invalidateCache();
+        _nextId = 1;
     }
 
     /**
@@ -198,21 +384,33 @@ export class Signal {
     }
 
     /**
-     * 添加槽函数的辅助方法
-     * @param signalName 信号名称
-     * @param callback 槽函数回调
-     * @param target 槽函数目标对象
-     * @param options 连接选项
-     */
+      * 添加槽函数的辅助方法
+      * @param signalName 信号名称
+      * @param callback 槽函数回调
+      * @param target 槽函数目标对象
+      * @param options 连接选项
+      */
     private static addSlot<T extends (...args: any[]) => void>(signalName: string, callback: SlotFunc<T>, target: any, options?: SlotOptions): Connection {
+        // 参数验证
+        if (!signalName || typeof signalName !== 'string') {
+            throw new Error('Signal name must be a non-empty string');
+        }
+
+        if (typeof callback !== 'function') {
+            throw new Error('Callback must be a function');
+        }
+
         if (!this._slots.has(signalName)) {
             this._slots.set(signalName, []);
         }
+
         // 增加ID并创建槽函数
         const id = ++_nextId;
+        const group = options?.group;
+
         // 添加槽函数到信号映射
         const slots = this._slots.get(signalName)!;
-        slots.push({
+        const slot: Slot<T> = {
             id: id,
             callback: callback,
             target: target,
@@ -220,12 +418,24 @@ export class Signal {
             queued: options?.queued || false,
             throttle: options?.throttle || undefined,
             debounce: options?.debounce || undefined,
-        });
+            group: group,
+        };
+        slots.push(slot);
+
+        // 新增：如果有分组，添加到分组映射中
+        if (group) {
+            this._addToGroupMap(signalName, id, group);
+        }
+
+        // 新增：清除缓存
+        this._invalidateCache();
+
         const disconnect = () => {
-            this.disconnect(signalName, callback, target);
+            this.disconnectById(signalName, id);
         };
         return new Connection(id, disconnect);
     }
+
 
     private static executeSlot<T extends (...args: any[]) => void>(slot: Slot<T>, args: Parameters<T>): void {
         try {
@@ -305,7 +515,7 @@ export class Signal {
  * @param signalName 可选的信号名称
  * @param options 信号选项
  */
-export function signal(signalName?: string, options?: { debug?: boolean }) {
+export function signal(signalName?: string, options?: { debug?: boolean, group?: string }) { // 添加defaultGroup选项
     return function (target: any, prop: string) {
         const signalMap = new WeakMap<any, Record<string, Function>>();
 
@@ -325,13 +535,14 @@ export function signal(signalName?: string, options?: { debug?: boolean }) {
                     };
                     anonymous.signalName = finalName;
 
-                    // 添加调试信息
-                    if (options?.debug) {
+                    // 添加调试信息和默认分组
+                    if (options) {
                         Object.defineProperty(anonymous, '__debugInfo', {
                             value: {
                                 signalName: finalName,
                                 owner: this,
-                                createdAt: new Date().toISOString()
+                                createdAt: new Date().toISOString(),
+                                group: options.group || undefined
                             },
                             enumerable: false
                         });
