@@ -5,10 +5,10 @@ const miaowed = '123';
 class Tom {
 
     // 定义信号miaowed，参数类型为(id: number, msg: string)
-    @signal(miaowed)
+    @signal(miaowed, { debug: true })
     miaowed: (id: number, msg: string) => void;
     // 定义信号hovered，参数类型为(isHovered: boolean)
-    @signal()
+    @signal(null, { debug: true })
     hovered: (isHovered: boolean) => void;
 
     @signal()
@@ -79,6 +79,11 @@ class Example {
         console.log('\n--- 触发信号 ---');
         this.tom.miaow();
 
+        // 获取并打印调试信息
+        if (this.tom.miaowed?.['__debugInfo']) {
+            console.log("\n调试信息:", this.tom.miaowed?.['__debugInfo']);
+        }
+
         console.log('\n--- 再次触发信号（一次性槽函数不会再次执行）---');
         this.tom.miaow();
 
@@ -89,12 +94,12 @@ class Example {
         console.log('\n--- 信号转发 ---');
         const connection = Signal.forwardTo(this.tom.hovered, this.tom.hovered_forward);
         this.tom.hover(true);
-        this.tom.forward(false);
 
         console.log('\n--- 断开信号转发连接 ---');
         connection.disconnect();
         this.tom.hover(true);
-        this.tom.forward(false);
+        console.log('\n--- 结束 ---');
+
     }
 }
 

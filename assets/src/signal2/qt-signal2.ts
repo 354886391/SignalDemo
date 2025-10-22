@@ -137,19 +137,32 @@ export class Signal {
         }
     }
 
-     /**
-     * 将一个信号转发到另一个信号
-     * @param sourceSignal 源信号（字符串名称或函数引用）
-     * @param targetSignal 目标信号（字符串名称或函数引用）
-     * @param options 连接选项
-     * @returns 连接对象，可用于断开转发
-     */
-    static forwardTo<T extends (...args: any[]) => void>(sourceSignal: T | string, targetSignal: T | string, options?: SlotOptions): Connection {
-        // 创建转发函数，将源信号的参数转发到目标信号
+    /**
+    * 将一个信号转发到另一个信号，可选择参数转换
+    * @param sourceSignal 源信号
+    * @param targetSignal 目标信号
+    * @param options 连接选项
+    * @param transform 可选的参数转换函数
+    * @returns 连接对象，可用于断开转发
+    */
+    static forwardTo<T extends (...args: any[]) => void, U extends (...args: any[]) => void>(
+        sourceSignal: T | string,
+        targetSignal: U | string,
+        options?: SlotOptions,
+        transform?: (args: Parameters<T>) => Parameters<U>
+    ): Connection {
+        // 创建转发函数，根据是否有转换函数来决定如何处理参数
         const forwarder = (...args: Parameters<T>) => {
-            this.emit(targetSignal, ...args);
+            if (transform) {
+                // 使用转换函数处理参数
+                const transformedArgs = transform(args);
+                this.emit(targetSignal, ...transformedArgs);
+            } else {
+                // 无转换函数时，直接转发参数
+                this.emit(targetSignal, ...args as any);
+            }
         };
-        
+
         // 连接源信号和转发函数
         return this.connect(sourceSignal, forwarder, undefined, options);
     }
@@ -190,7 +203,17 @@ export class Signal {
                 slot.callback(...args);
             }
         } catch (error) {
-            console.error(`Error in slot function for signal ${slot['signalName'] || 'unnamed'}:`, error);
+            // 增强错误处理，添加更多上下文信息
+            const signalName = slot['signalName'] || 'unnamed';
+            const targetName = slot.target ? slot.target.constructor.name : 'none';
+            console.error(`Error in slot function for signal "${signalName}" (target: ${targetName}):`, error);
+
+            // 可选：触发全局错误信号以便应用级处理
+            if (typeof window !== 'undefined' && window.dispatchEvent) {
+                window.dispatchEvent(new CustomEvent('signal:error', {
+                    detail: { signalName, error, target: slot.target }
+                }));
+            }
         }
     }
 
@@ -217,27 +240,41 @@ export class Signal {
 
 /**
  * 信号装饰器 - 用于定义信号属性
- * @param signalName 可选的信号名称，如果不提供则使用类名.属性名
+ * @param signalName 可选的信号名称
+ * @param options 信号选项
  */
-export function signal(signalName?: string) {
+export function signal(signalName?: string, options?: { debug?: boolean }) {
     return function (target: any, prop: string) {
-        // 使用WeakMap存储每个实例的信号函数缓存
         const signalMap = new WeakMap<any, Record<string, Function>>();
-        // 使用属性描述符来定义信号属性
+
         Object.defineProperty(target, prop, {
             get: function () {
-                // 如果实例没有信号缓存，创建一个
                 if (!signalMap.has(this)) {
                     signalMap.set(this, {});
                 }
                 const signalTemp = signalMap.get(this)!;
-                // 如果当前信号函数已缓存，直接返回
+
                 if (!signalTemp[prop]) {
-                    // 创建信号函数并设置信号名
-                    const finalName = signalName ? signalName
-                        : `${this.constructor.name}.${prop}`;
-                    const anonymous = function () { };
+                    const finalName = signalName ? signalName : `${this.constructor.name}.${prop}`;
+                    const anonymous = function () {
+                        if (options?.debug) {
+                            console.log(`Signal ${finalName} called directly (should use Signal.emit instead)`);
+                        }
+                    };
                     anonymous.signalName = finalName;
+
+                    // 添加调试信息
+                    if (options?.debug) {
+                        Object.defineProperty(anonymous, '__debugInfo', {
+                            value: {
+                                signalName: finalName,
+                                owner: this,
+                                createdAt: new Date().toISOString()
+                            },
+                            enumerable: false
+                        });
+                    }
+
                     signalTemp[prop] = anonymous;
                 }
                 return signalTemp[prop];
