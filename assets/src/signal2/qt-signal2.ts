@@ -68,7 +68,7 @@ export class Signal {
     private static _signals: Map<string, SignalInfo> = new Map();
 
     // 全局分组映射（分组名 -> 信号槽关联集合）groupName -> { signalName: string, slotId: number }
-    private static _globalGroups: Map<string, GroupInfo> = new Map();
+    private static _globals: Map<string, GroupInfo> = new Map();
 
     /**
      * 触发信号
@@ -216,7 +216,7 @@ export class Signal {
         }
 
         // 使用分组映射进行高效断开
-        const groupSlots = this._globalGroups.get(groupName);
+        const groupSlots = this._globals.get(groupName);
         if (!groupSlots) return;
 
         // 保存需要断开的槽，避免在遍历时修改集合
@@ -229,7 +229,7 @@ export class Signal {
 
         // 清理空分组
         if (groupSlots.size === 0) {
-            this._globalGroups.delete(groupName);
+            this._globals.delete(groupName);
         }
 
         // 清除缓存
@@ -244,7 +244,7 @@ export class Signal {
         }
 
         // 使用分组映射直接获取数量，避免遍历所有槽
-        const groupSlots = this._globalGroups.get(groupName);
+        const groupSlots = this._globals.get(groupName);
         return groupSlots ? groupSlots.size : 0;
     }
 
@@ -255,7 +255,7 @@ export class Signal {
         }
 
         // 使用分组映射直接检查，避免遍历所有槽
-        const groupSlots = this._globalGroups.get(groupName);
+        const groupSlots = this._globals.get(groupName);
         return groupSlots ? groupSlots.size > 0 : false;
     }
 
@@ -267,8 +267,8 @@ export class Signal {
         }
 
         // 获取所有非空分组名称
-        const groups = Array.from(this._globalGroups.keys()).filter(groupName => {
-            const slots = this._globalGroups.get(groupName);
+        const groups = Array.from(this._globals.keys()).filter(groupName => {
+            const slots = this._globals.get(groupName);
             return slots && slots.size > 0;
         });
 
@@ -284,7 +284,7 @@ export class Signal {
             return [];
         }
 
-        const groupSlots = this._globalGroups.get(groupName);
+        const groupSlots = this._globals.get(groupName);
         if (!groupSlots) {
             return [];
         }
@@ -308,10 +308,10 @@ export class Signal {
 
     // 辅助方法：获取全局分组数据
     private static _getGlobalGroupData(groupName: string) {
-        if (!this._globalGroups.has(groupName)) {
-            this._globalGroups.set(groupName, new Set());
+        if (!this._globals.has(groupName)) {
+            this._globals.set(groupName, new Set());
         }
-        return this._globalGroups.get(groupName);
+        return this._globals.get(groupName);
     }
 
     // 辅助方法：添加到全局分组
@@ -322,7 +322,7 @@ export class Signal {
 
     // 辅助方法：从全局分组中移除
     private static _removeFromGlobalGroup(signalName: string, slotId: number, groupName: string) {
-        const groupData = this._globalGroups.get(groupName);
+        const groupData = this._globals.get(groupName);
         if (!groupData) return;
 
         // 正确查找并删除槽项，解决对象引用比较问题
@@ -335,7 +335,7 @@ export class Signal {
 
         // 如果分组为空，删除该分组
         if (groupData.size === 0) {
-            this._globalGroups.delete(groupName);
+            this._globals.delete(groupName);
         }
     }
 
@@ -374,7 +374,7 @@ export class Signal {
      */
     static reset(): void {
         this._signals.clear();
-        this._globalGroups.clear();
+        this._globals.clear();
         this._invalidateCache();
         _nextId = 1;
     }
@@ -521,7 +521,7 @@ export class Signal {
             signalName = signal.name;
             // 如果函数名是anonymous或空字符串，尝试使用函数对象的signalName属性
             if (signalName === 'anonymous' || signalName === '') {
-                signalName = signal['signalName'] || 'unknown';
+                signalName = signal['__signalName'] || 'unknown';
             }
         } else {
             // 如果传入的是字符串，直接使用该字符串作为信号名
@@ -573,21 +573,14 @@ export function signal(signalName?: string, options?: { debug?: boolean, group?:
                             console.log(`Signal ${finalName} called directly (should use Signal.emit instead)`);
                         }
                     };
-                    anonymous.signalName = finalName;
-
+                    // 添加信号名属性
+                    anonymous['__signalName'] = finalName;
                     // 添加调试信息和默认分组
-                    if (options) {
-                        Object.defineProperty(anonymous, '__debugInfo', {
-                            value: {
-                                signalName: finalName,
-                                owner: this,
-                                createdAt: new Date().toISOString(),
-                                group: options.group || undefined
-                            },
-                            enumerable: false
-                        });
-                    }
-
+                    anonymous['__debugInfo'] = {
+                        owner: this,
+                        group: options?.group || undefined,
+                        createdAt: new Date().toISOString()
+                    };
                     signalTemp[prop] = anonymous;
                 }
                 return signalTemp[prop];
